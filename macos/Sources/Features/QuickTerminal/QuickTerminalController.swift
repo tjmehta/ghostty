@@ -76,6 +76,21 @@ class QuickTerminalController: BaseTerminalController {
             selector: #selector(onNewTab),
             name: Ghostty.Notification.ghosttyNewTab,
             object: nil)
+        center.addObserver(
+            self,
+            selector: #selector(onMoveTab),
+            name: .ghosttyMoveTab,
+            object: nil)
+        center.addObserver(
+            self,
+            selector: #selector(onGotoTab),
+            name: Ghostty.Notification.ghosttyGotoTab,
+            object: nil)
+        center.addObserver(
+            self,
+            selector: #selector(onCloseTab),
+            name: .ghosttyCloseTab,
+            object: nil)
     }
 
     required init?(coder: NSCoder) {
@@ -105,6 +120,12 @@ class QuickTerminalController: BaseTerminalController {
         // make this restorable, but it isn't currently implemented.
         window.isRestorable = false
 
+        // Enable native tabbing for the quick terminal window
+        if let nsWindow = window as? NSWindow {
+            nsWindow.tabbingMode = .preferred
+            nsWindow.tabbingIdentifier = "ghostty-quick-terminal"
+        }
+
         // Setup our configured appearance that we support.
         syncAppearance()
 
@@ -120,6 +141,12 @@ class QuickTerminalController: BaseTerminalController {
 
         // Animate the window in
         animateIn()
+    }
+
+    // Shows the "+" button in the tab bar, responds to that click.
+    override func newWindowForTab(_ sender: Any?) {
+        // Create a new tab in the quick terminal
+        createNewTab()
     }
 
     // MARK: NSWindowDelegate
@@ -257,6 +284,34 @@ class QuickTerminalController: BaseTerminalController {
             animateOut()
         } else {
             animateIn()
+        }
+    }
+    
+    /// Toggle the entire quick terminal tab group
+    func toggleTabGroup() {
+        // If any window in the tab group is visible, hide all of them
+        if let tabGroup = window?.tabGroup {
+            let anyVisible = tabGroup.windows.compactMap { 
+                $0.windowController as? QuickTerminalController 
+            }.contains { $0.visible }
+            
+            if anyVisible {
+                // Hide all quick terminal tabs
+                for window in tabGroup.windows {
+                    if let controller = window.windowController as? QuickTerminalController {
+                        controller.animateOut()
+                    }
+                }
+            } else {
+                // Show the last active or first quick terminal tab
+                if let activeWindow = tabGroup.selectedWindow ?? tabGroup.windows.first,
+                   let controller = activeWindow.windowController as? QuickTerminalController {
+                    controller.animateIn()
+                }
+            }
+        } else {
+            // No tab group, use regular toggle
+            toggle()
         }
     }
 
@@ -515,25 +570,88 @@ class QuickTerminalController: BaseTerminalController {
         }
     }
 
-    private func showNoNewTabAlert() {
-        guard let window else { return }
-        let alert = NSAlert()
-        alert.messageText = "Cannot Create New Tab"
-        alert.informativeText = "Tabs aren't supported in the Quick Terminal."
-        alert.addButton(withTitle: "OK")
-        alert.alertStyle = .warning
-        alert.beginSheetModal(for: window)
+    // MARK: Tab Management
+
+    /// Create a new tab in the quick terminal
+    @discardableResult
+    func createNewTab(withBaseConfig baseConfig: Ghostty.SurfaceConfiguration? = nil) -> QuickTerminalController? {
+        guard let window = self.window else { return nil }
+        
+        // Create a new quick terminal controller with the same configuration
+        let newController = QuickTerminalController(
+            ghostty,
+            position: position,
+            baseConfig: baseConfig
+        )
+        
+        guard let newWindow = newController.window else { return newController }
+        
+        // If the parent is miniaturized, bring it back out
+        if window.isMiniaturized {
+            window.deminiaturize(self)
+        }
+        
+        // Enable tabbing for the new window
+        if let newNSWindow = newWindow as? NSWindow {
+            newNSWindow.tabbingMode = .preferred
+            newNSWindow.tabbingIdentifier = "ghostty-quick-terminal"
+        }
+        
+        // Add the new window as a tab
+        if newWindow.tabbingMode != .disallowed {
+            window.addTabbedWindow(newWindow, ordered: .above)
+        }
+        
+        // Show the new tab
+        DispatchQueue.main.async {
+            newController.showWindow(self)
+            newWindow.makeKeyAndOrderFront(self)
+        }
+        
+        return newController
     }
 
     // MARK: First Responder
 
     @IBAction override func closeWindow(_ sender: Any) {
-        // Instead of closing the window, we animate it out.
-        animateOut()
+        // If we're the last tab in a tab group, animate out instead of closing
+        if let tabGroup = window?.tabGroup, tabGroup.windows.count == 1 {
+            animateOut()
+        } else {
+            // If we have multiple tabs, just close this tab normally
+            window?.close()
+        }
     }
 
     @IBAction func newTab(_ sender: Any?) {
-        showNoNewTabAlert()
+        createNewTab()
+    }
+
+    @IBAction func closeTab(_ sender: Any?) {
+        guard let window = window else { return }
+        
+        // If we only have one tab, animate out instead of closing
+        guard let tabGroup = window.tabGroup, tabGroup.windows.count > 1 else {
+            animateOut()
+            return
+        }
+
+        // Check if we need confirmation to close
+        guard surfaceTree.contains(where: { $0.needsConfirmQuit }) else {
+            closeTabImmediately()
+            return
+        }
+
+        confirmClose(
+            messageText: "Close Tab?",
+            informativeText: "The terminal still has a running process. If you close the tab the process will be killed."
+        ) {
+            self.closeTabImmediately()
+        }
+    }
+    
+    private func closeTabImmediately() {
+        window?.close()
     }
 
     @IBAction func toggleGhosttyFullScreen(_ sender: Any) {
@@ -603,8 +721,110 @@ class QuickTerminalController: BaseTerminalController {
         guard let surfaceView = notification.object as? Ghostty.SurfaceView else { return }
         guard let window = surfaceView.window else { return }
         guard window.windowController is QuickTerminalController else { return }
-        // Tabs aren't supported with Quick Terminals or derivatives
-        showNoNewTabAlert()
+        // Create a new tab in the quick terminal
+        createNewTab()
+    }
+    
+    @objc private func onMoveTab(notification: SwiftUI.Notification) {
+        guard let target = notification.object as? Ghostty.SurfaceView else { return }
+        guard target == self.focusedSurface else { return }
+        guard let window = self.window else { return }
+
+        // Get the move action
+        guard let action = notification.userInfo?[Notification.Name.GhosttyMoveTabKey] as? Ghostty.Action.MoveTab else { return }
+        guard action.amount != 0 else { return }
+
+        // Determine our current selected index
+        guard let tabGroup = window.tabGroup else { return }
+        guard let selectedWindow = tabGroup.selectedWindow else { return }
+        let tabbedWindows = tabGroup.windows
+        guard tabbedWindows.count > 0 else { return }
+        guard let selectedIndex = tabbedWindows.firstIndex(where: { $0 == selectedWindow }) else { return }
+
+        // Determine the final index we want to insert our tab
+        let finalIndex: Int
+        if action.amount < 0 {
+            finalIndex = selectedIndex - min(selectedIndex, -action.amount)
+        } else {
+            let remaining: Int = tabbedWindows.count - 1 - selectedIndex
+            finalIndex = selectedIndex + min(remaining, action.amount)
+        }
+
+        // If our index is the same we do nothing
+        guard finalIndex != selectedIndex else { return }
+
+        // Get our target window
+        let targetWindow = tabbedWindows[finalIndex]
+
+        // Begin a group of window operations to minimize visual updates
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.current.duration = 0
+
+        // Remove and re-add the window in the correct position
+        tabGroup.removeWindow(selectedWindow)
+        targetWindow.addTabbedWindow(selectedWindow, ordered: action.amount < 0 ? .below : .above)
+
+        // Ensure our window remains selected
+        selectedWindow.makeKey()
+
+        NSAnimationContext.endGrouping()
+    }
+
+    @objc private func onGotoTab(notification: SwiftUI.Notification) {
+        guard let target = notification.object as? Ghostty.SurfaceView else { return }
+        guard target == self.focusedSurface else { return }
+        guard let window = self.window else { return }
+
+        // Get the tab index from the notification
+        guard let tabEnumAny = notification.userInfo?[Ghostty.Notification.GotoTabKey] else { return }
+        guard let tabEnum = tabEnumAny as? ghostty_action_goto_tab_e else { return }
+        let tabIndex: Int32 = tabEnum.rawValue
+
+        guard let tabGroup = window.tabGroup else { return }
+        let tabbedWindows = tabGroup.windows
+
+        // This will be the index we want to actual go to
+        let finalIndex: Int
+
+        // An index that is invalid is used to signal some special values.
+        if (tabIndex <= 0) {
+            guard let selectedWindow = tabGroup.selectedWindow else { return }
+            guard let selectedIndex = tabbedWindows.firstIndex(where: { $0 == selectedWindow }) else { return }
+
+            if (tabIndex == GHOSTTY_GOTO_TAB_PREVIOUS.rawValue) {
+                if (selectedIndex == 0) {
+                    finalIndex = tabbedWindows.count - 1
+                } else {
+                    finalIndex = selectedIndex - 1
+                }
+            } else if (tabIndex == GHOSTTY_GOTO_TAB_NEXT.rawValue) {
+                if (selectedIndex == tabbedWindows.count - 1) {
+                    finalIndex = 0
+                } else {
+                    finalIndex = selectedIndex + 1
+                }
+            } else if (tabIndex == GHOSTTY_GOTO_TAB_LAST.rawValue) {
+                finalIndex = tabbedWindows.count - 1
+            } else {
+                return
+            }
+        } else {
+            // The configured value is 1-indexed.
+            guard tabIndex >= 1 else { return }
+
+            // If our index is outside our boundary then we use the max
+            finalIndex = min(Int(tabIndex - 1), tabbedWindows.count - 1)
+        }
+
+        guard finalIndex >= 0 else { return }
+        let targetWindow = tabbedWindows[finalIndex]
+        targetWindow.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func onCloseTab(notification: SwiftUI.Notification) {
+        guard let target = notification.object as? Ghostty.SurfaceView else { return }
+        guard surfaceTree.contains(target) else { return }
+        closeTab(nil)
     }
 
     private struct DerivedConfig {
