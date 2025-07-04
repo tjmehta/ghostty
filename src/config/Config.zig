@@ -2090,6 +2090,44 @@ keybind: Keybinds = .{},
 /// On macOS the behavior is always equivalent to `on-demand`.
 @"quick-terminal-keyboard-interactivity": QuickTerminalKeyboardInteractivity = .@"on-demand",
 
+/// The position where new tabs are inserted in the quick terminal.
+///
+/// Valid values:
+///
+///   * `current` - Insert the new tab after the currently focused tab,
+///     or at the end if there are no focused tabs.
+///
+///   * `end` - Insert the new tab at the end of the tab list.
+///
+/// The default value is `current`.
+///
+/// Only implemented on macOS. On Linux the behavior is always equivalent to `current`.
+@"quick-terminal-new-tab-position": WindowNewTabPosition = .current,
+
+/// Whether to show the tab bar in the quick terminal.
+///
+/// Valid values:
+///
+///  - `always`
+///
+///    Always display the tab bar, even when there's only one tab.
+///
+///  - `auto` *(default)*
+///
+///    Automatically show and hide the tab bar. The tab bar is only
+///    shown when there are two or more tabs present.
+///
+///  - `never`
+///
+///    Never show the tab bar. Tabs are only accessible via keyboard
+///    shortcuts and other actions.
+///
+/// The default value is `auto`.
+///
+/// Only implemented on macOS. On Linux the behavior follows the regular
+/// `window-show-tab-bar` configuration.
+@"quick-terminal-show-tab-bar": WindowShowTabBar = .auto,
+
 /// Whether to enable shell integration auto-injection or not. Shell integration
 /// greatly enhances the terminal experience by enabling a number of features:
 ///

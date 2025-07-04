@@ -122,7 +122,7 @@ class QuickTerminalController: BaseTerminalController {
 
         // Enable native tabbing for the quick terminal window
         if let nsWindow = window as? NSWindow {
-            nsWindow.tabbingMode = .preferred
+            configureTabbingMode(for: nsWindow)
             nsWindow.tabbingIdentifier = "ghostty-quick-terminal"
         }
 
@@ -145,6 +145,8 @@ class QuickTerminalController: BaseTerminalController {
 
     // Shows the "+" button in the tab bar, responds to that click.
     override func newWindowForTab(_ sender: Any?) {
+        // Only create tabs if tab bar is not disabled
+        guard derivedConfig.quickTerminalShowTabBar != .never else { return }
         // Create a new tab in the quick terminal
         createNewTab()
     }
@@ -571,11 +573,41 @@ class QuickTerminalController: BaseTerminalController {
     }
 
     // MARK: Tab Management
+    
+    /// Configure the tabbing mode based on the show tab bar setting
+    private func configureTabbingMode(for window: NSWindow) {
+        switch derivedConfig.quickTerminalShowTabBar {
+        case .always:
+            window.tabbingMode = .preferred
+        case .auto:
+            window.tabbingMode = .preferred
+        case .never:
+            window.tabbingMode = .disallowed
+        }
+    }
+    
+    /// Update tabbing mode for all windows in the tab group
+    private func updateTabbingModeForTabGroup() {
+        guard let window = self.window else { return }
+        guard let tabGroup = window.tabGroup else {
+            configureTabbingMode(for: window)
+            return
+        }
+        
+        for tabWindow in tabGroup.windows {
+            if let nsWindow = tabWindow as? NSWindow {
+                configureTabbingMode(for: nsWindow)
+            }
+        }
+    }
 
     /// Create a new tab in the quick terminal
     @discardableResult
     func createNewTab(withBaseConfig baseConfig: Ghostty.SurfaceConfiguration? = nil) -> QuickTerminalController? {
         guard let window = self.window else { return nil }
+        
+        // Don't create tabs if tab bar is disabled
+        guard derivedConfig.quickTerminalShowTabBar != .never else { return nil }
         
         // Create a new quick terminal controller with the same configuration
         let newController = QuickTerminalController(
@@ -593,13 +625,25 @@ class QuickTerminalController: BaseTerminalController {
         
         // Enable tabbing for the new window
         if let newNSWindow = newWindow as? NSWindow {
-            newNSWindow.tabbingMode = .preferred
+            configureTabbingMode(for: newNSWindow)
             newNSWindow.tabbingIdentifier = "ghostty-quick-terminal"
         }
         
-        // Add the new window as a tab
+        // Add the new window as a tab based on configuration
         if newWindow.tabbingMode != .disallowed {
-            window.addTabbedWindow(newWindow, ordered: .above)
+            switch derivedConfig.quickTerminalNewTabPosition {
+            case .end:
+                // Add at the end of the tab group
+                if let tabGroup = window.tabGroup,
+                   let lastWindow = tabGroup.windows.last {
+                    lastWindow.addTabbedWindow(newWindow, ordered: .above)
+                } else {
+                    window.addTabbedWindow(newWindow, ordered: .above)
+                }
+            case .current:
+                // Add after the current tab
+                window.addTabbedWindow(newWindow, ordered: .above)
+            }
         }
         
         // Show the new tab
@@ -624,6 +668,8 @@ class QuickTerminalController: BaseTerminalController {
     }
 
     @IBAction func newTab(_ sender: Any?) {
+        // Only create tabs if tab bar is not disabled
+        guard derivedConfig.quickTerminalShowTabBar != .never else { return }
         createNewTab()
     }
 
@@ -714,6 +760,9 @@ class QuickTerminalController: BaseTerminalController {
         // Update our derived config
         self.derivedConfig = DerivedConfig(config)
 
+        // Update tabbing mode based on new configuration
+        updateTabbingModeForTabGroup()
+
         syncAppearance()
     }
 
@@ -721,6 +770,8 @@ class QuickTerminalController: BaseTerminalController {
         guard let surfaceView = notification.object as? Ghostty.SurfaceView else { return }
         guard let window = surfaceView.window else { return }
         guard window.windowController is QuickTerminalController else { return }
+        // Only create tabs if tab bar is not disabled
+        guard derivedConfig.quickTerminalShowTabBar != .never else { return }
         // Create a new tab in the quick terminal
         createNewTab()
     }
@@ -832,6 +883,8 @@ class QuickTerminalController: BaseTerminalController {
         let quickTerminalAnimationDuration: Double
         let quickTerminalAutoHide: Bool
         let quickTerminalSpaceBehavior: QuickTerminalSpaceBehavior
+        let quickTerminalNewTabPosition: Ghostty.Config.WindowNewTabPosition
+        let quickTerminalShowTabBar: Ghostty.Config.WindowShowTabBar
         let backgroundOpacity: Double
 
         init() {
@@ -839,6 +892,8 @@ class QuickTerminalController: BaseTerminalController {
             self.quickTerminalAnimationDuration = 0.2
             self.quickTerminalAutoHide = true
             self.quickTerminalSpaceBehavior = .move
+            self.quickTerminalNewTabPosition = .current
+            self.quickTerminalShowTabBar = .auto
             self.backgroundOpacity = 1.0
         }
 
@@ -847,6 +902,8 @@ class QuickTerminalController: BaseTerminalController {
             self.quickTerminalAnimationDuration = config.quickTerminalAnimationDuration
             self.quickTerminalAutoHide = config.quickTerminalAutoHide
             self.quickTerminalSpaceBehavior = config.quickTerminalSpaceBehavior
+            self.quickTerminalNewTabPosition = config.quickTerminalNewTabPosition
+            self.quickTerminalShowTabBar = config.quickTerminalShowTabBar
             self.backgroundOpacity = config.backgroundOpacity
         }
     }

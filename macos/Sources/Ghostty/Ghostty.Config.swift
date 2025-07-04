@@ -475,6 +475,26 @@ extension Ghostty {
             let str = String(cString: ptr)
             return QuickTerminalSpaceBehavior(fromGhosttyConfig: str) ?? .move
         }
+
+        var quickTerminalNewTabPosition: WindowNewTabPosition {
+            guard let config = self.config else { return .current }
+            var v: UnsafePointer<Int8>? = nil
+            let key = "quick-terminal-new-tab-position"
+            guard ghostty_config_get(config, &v, key, UInt(key.count)) else { return .current }
+            guard let ptr = v else { return .current }
+            let str = String(cString: ptr)
+            return WindowNewTabPosition(rawValue: str) ?? .current
+        }
+
+        var quickTerminalShowTabBar: WindowShowTabBar {
+            guard let config = self.config else { return .auto }
+            var v: UnsafePointer<Int8>? = nil
+            let key = "quick-terminal-show-tab-bar"
+            guard ghostty_config_get(config, &v, key, UInt(key.count)) else { return .auto }
+            guard let ptr = v else { return .auto }
+            let str = String(cString: ptr)
+            return WindowShowTabBar(rawValue: str) ?? .auto
+        }
         #endif
 
         var resizeOverlay: ResizeOverlay {
@@ -657,5 +677,16 @@ extension Ghostty.Config {
             case .none: return false
             }
         }
+    }
+
+    enum WindowNewTabPosition: String {
+        case current
+        case end
+    }
+
+    enum WindowShowTabBar: String {
+        case always
+        case auto
+        case never
     }
 }
